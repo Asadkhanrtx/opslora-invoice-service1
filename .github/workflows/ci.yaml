@@ -119,7 +119,7 @@
 #             <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">
 #               View Pipeline
 #             </a>
-name: Security Pipeline2
+name: Security Pipeline
 
 on:
   push:
@@ -135,14 +135,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 🔍 SONARQUBE SCAN
+      # 🔍 SonarQube Scan
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-      # ✅ QUALITY GATE CHECK
+      # ✅ Quality Gate
       - name: SonarQube Quality Gate
         id: sonar-gate
         uses: SonarSource/sonarqube-quality-gate-action@v1
@@ -151,48 +151,37 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      # 📧 EMAIL IF SONAR FAILS
-      - name: Email if Sonar Fails
-        if: steps.sonar-gate.outputs.quality-gate-status == 'FAILED'
-        uses: hilarion5/send-mail@v1
-        with:
-          smtp-server: smtp.gmail.com
-          smtp-port: 587
-          smtp-secure: false
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          from-email: ${{ secrets.EMAIL_USERNAME }}
-          to-email: lijazsalim@gmail.com,asadchamp109@gmail.com,kajapathy07@gmail.com
-          subject: "FAILURE: SonarQube Quality Gate Failed"
-          html: |
-            <h2 style="color:red;">SonarQube Failed</h2>
-            <p>Quality Gate failed. Fix code issues before proceeding.</p>
-
-            <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">
-              View Report
-            </a>
-
-      # ⛔ STOP PIPELINE IF SONAR FAILS
+      # ⛔ Stop if Sonar fails
       - name: Stop if Sonar Failed
         if: steps.sonar-gate.outputs.quality-gate-status == 'FAILED'
-        run: exit 1
+        run: |
+          echo "SONAR_FAILED=true" >> $GITHUB_ENV
+          exit 1
 
-      # 🔐 SNYK SCAN (ONLY RUNS IF SONAR PASSED)
+      # 🔐 Install Snyk (ONLY if Sonar passed)
       - name: Install Snyk
+        if: steps.sonar-gate.outputs.quality-gate-status == 'PASSED'
         run: npm install -g snyk
 
       - name: Authenticate Snyk
+        if: steps.sonar-gate.outputs.quality-gate-status == 'PASSED'
         run: snyk auth ${{ secrets.SNYK_TOKEN }}
 
+      # 🔍 Snyk Scan
       - name: Run Snyk Test
         id: snyk-test
+        if: steps.sonar-gate.outputs.quality-gate-status == 'PASSED'
         continue-on-error: true
-        run: |
-          snyk test --severity-threshold=high
+        run: snyk test --severity-threshold=high
 
-      # 📧 EMAIL IF SNYK FAILS
-      - name: Email if Snyk Fails
+      # 🚨 Set Snyk failure flag
+      - name: Set Snyk Status
         if: steps.snyk-test.outcome == 'failure'
+        run: echo "SNYK_FAILED=true" >> $GITHUB_ENV
+
+      # 📧 SINGLE NOTIFICATION STEP
+      - name: Send Notification (if any fails)
+        if: env.SONAR_FAILED == 'true' || env.SNYK_FAILED == 'true'
         uses: hilarion5/send-mail@v1
         with:
           smtp-server: smtp.gmail.com
@@ -201,32 +190,15 @@ jobs:
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
           from-email: ${{ secrets.EMAIL_USERNAME }}
-          to-email: lijazsalim@gmail.com,asadchamp109@gmail.com,kajapathy07@gmail.com
-          subject: "FAILURE: Snyk Vulnerabilities Detected"
+          to-email: asadchamp109@gmail.com,kajapathy07@gmail.com
+          subject: "ALERT: Security Scan Failed"
           html: |
-            <h2 style="color:red;">Snyk Scan Failed</h2>
-            <p>Vulnerabilities detected in dependencies.</p>
+            <h2 style="color:red;">Security Alert</h2>
 
-            <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">
-              View Report
-            </a>
+            <p><b>SonarQube Status:</b> ${{ env.SONAR_FAILED == 'true' && 'FAILED' || 'PASSED' }}</p>
+            <p><b>Snyk Status:</b> ${{ env.SNYK_FAILED == 'true' && 'FAILED' || 'PASSED' }}</p>
 
-      # 📧 EMAIL IF EVERYTHING PASSES
-      - name: Email if All Passed
-        if: steps.snyk-test.outcome == 'success'
-        uses: hilarion5/send-mail@v1
-        with:
-          smtp-server: smtp.gmail.com
-          smtp-port: 587
-          smtp-secure: false
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          from-email: ${{ secrets.EMAIL_USERNAME }}
-          to-email: lijazsalim@gmail.com,asadchamp109@gmail.com,kajapathy07@gmail.com
-          subject: "SUCCESS: All Security Checks Passed"
-          html: |
-            <h2 style="color:green;">Pipeline Successful</h2>
-            <p>SonarQube and Snyk scans passed successfully.</p>
+            <p>Please check the pipeline for details.</p>
 
             <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">
               View Pipeline
