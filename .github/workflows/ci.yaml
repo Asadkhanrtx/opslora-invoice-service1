@@ -124,7 +124,7 @@ name: Security Pipeline2
 on:
   push:
     branches:
-      - master
+      - refactor/invoice-service
 
 jobs:
   security:
