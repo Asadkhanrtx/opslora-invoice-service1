@@ -135,7 +135,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 🔍 SonarQube Scan
+      # 🔍 SonarQube Scan (unchanged)
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
@@ -151,14 +151,14 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      # ⛔ Stop if Sonar fails
-      - name: Stop if Sonar Failed
-        if: steps.sonar-gate.outputs.quality-gate-status == 'FAILED'
+      # 🚨 Set Sonar failure flag (no exit here)
+      - name: Set Sonar Status
         run: |
-          echo "SONAR_FAILED=true" >> $GITHUB_ENV
-          exit 1
+          if [ "${{ steps.sonar-gate.outputs.quality-gate-status }}" = "FAILED" ]; then
+            echo "SONAR_FAILED=true" >> $GITHUB_ENV
+          fi
 
-      # 🔐 Install Snyk (ONLY if Sonar passed)
+      # 🔐 Snyk runs ONLY if Sonar passed
       - name: Install Snyk
         if: steps.sonar-gate.outputs.quality-gate-status == 'PASSED'
         run: npm install -g snyk
@@ -167,7 +167,6 @@ jobs:
         if: steps.sonar-gate.outputs.quality-gate-status == 'PASSED'
         run: snyk auth ${{ secrets.SNYK_TOKEN }}
 
-      # 🔍 Snyk Scan
       - name: Run Snyk Test
         id: snyk-test
         if: steps.sonar-gate.outputs.quality-gate-status == 'PASSED'
@@ -179,8 +178,8 @@ jobs:
         if: steps.snyk-test.outcome == 'failure'
         run: echo "SNYK_FAILED=true" >> $GITHUB_ENV
 
-      # 📧 SINGLE NOTIFICATION STEP
-      - name: Send Notification (if any fails)
+      # 📧 SINGLE NOTIFICATION (only if anything fails)
+      - name: Send Notification
         if: env.SONAR_FAILED == 'true' || env.SNYK_FAILED == 'true'
         uses: hilarion5/send-mail@v1
         with:
@@ -195,11 +194,16 @@ jobs:
           html: |
             <h2 style="color:red;">Security Alert</h2>
 
-            <p><b>SonarQube Status:</b> ${{ env.SONAR_FAILED == 'true' && 'FAILED' || 'PASSED' }}</p>
-            <p><b>Snyk Status:</b> ${{ env.SNYK_FAILED == 'true' && 'FAILED' || 'PASSED' }}</p>
+            <p><b>SonarQube:</b> ${{ env.SONAR_FAILED == 'true' && 'FAILED' || 'PASSED' }}</p>
+            <p><b>Snyk:</b> ${{ env.SNYK_FAILED == 'true' && 'FAILED' || 'PASSED' }}</p>
 
             <p>Please check the pipeline for details.</p>
 
             <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">
               View Pipeline
             </a>
+
+      # ⛔ Finally fail pipeline if anything failed (after email)
+      - name: Fail Pipeline
+        if: env.SONAR_FAILED == 'true' || env.SNYK_FAILED == 'true'
+        run: exit 1
