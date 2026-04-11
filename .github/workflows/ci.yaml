@@ -127,15 +127,18 @@ on:
       - refactor/invoice-service
 
 jobs:
-  security:
+
+  # 🔍 SONAR JOB
+  sonar:
     runs-on: ubuntu-latest
+    outputs:
+      sonar_status: ${{ steps.sonar-gate.outputs.quality-gate-status }}
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 🔍 SonarQube Scan
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
@@ -145,7 +148,6 @@ jobs:
           args: >
             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
 
-      # ✅ Quality Gate
       - name: SonarQube Quality Gate
         id: sonar-gate
         uses: SonarSource/sonarqube-quality-gate-action@v1
@@ -154,37 +156,61 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      # 🚨 Set Sonar Status
-      - name: Set Sonar Status
-        run: |
-          if [ "${{ steps.sonar-gate.outputs.quality-gate-status }}" = "FAILED" ]; then
-            echo "SONAR_FAILED=true" >> $GITHUB_ENV
-          fi
 
-      # 🔐 Install Snyk (ONLY if Sonar passed)
+  # 🔐 SNYK JOB (ONLY IF SONAR PASSED)
+  snyk:
+    runs-on: ubuntu-latest
+    needs: sonar
+    if: needs.sonar.outputs.sonar_status == 'PASSED'
+
+    outputs:
+      snyk_status: ${{ steps.set-status.outputs.snyk_status }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 👇 same pattern like your example (CLI, no snyk action)
       - name: Install Snyk
-        if: steps.sonar-gate.outputs.quality-gate-status == 'PASSED'
         run: npm install -g snyk
 
       - name: Authenticate Snyk
-        if: steps.sonar-gate.outputs.quality-gate-status == 'PASSED'
         run: snyk auth ${{ secrets.SNYK_TOKEN }}
 
-      # 🔍 Run Snyk Test
       - name: Run Snyk Test
         id: snyk-test
-        if: steps.sonar-gate.outputs.quality-gate-status == 'PASSED'
         continue-on-error: true
         run: snyk test --severity-threshold=high
 
-      # 🚨 Set Snyk Status
       - name: Set Snyk Status
-        if: steps.snyk-test.outcome == 'failure'
-        run: echo "SNYK_FAILED=true" >> $GITHUB_ENV
+        id: set-status
+        run: |
+          if [ "${{ steps.snyk-test.outcome }}" = "failure" ]; then
+            echo "snyk_status=FAILED" >> $GITHUB_OUTPUT
+          else
+            echo "snyk_status=PASSED" >> $GITHUB_OUTPUT
+          fi
 
-      # 📧 SINGLE NOTIFICATION STEP
-      - name: Send Notification
-        if: env.SONAR_FAILED == 'true' || env.SNYK_FAILED == 'true'
+
+  # 📧 NOTIFICATION JOB (COMMON)
+  notify:
+    runs-on: ubuntu-latest
+    needs: [sonar, snyk]
+    if: always()
+
+    steps:
+      - name: Decide Failure Reason
+        id: reason
+        run: |
+          if [ "${{ needs.sonar.outputs.sonar_status }}" = "FAILED" ]; then
+            echo "reason=SonarQube Quality Gate Failed" >> $GITHUB_OUTPUT
+          elif [ "${{ needs.snyk.outputs.snyk_status }}" = "FAILED" ]; then
+            echo "reason=Snyk Vulnerabilities Detected" >> $GITHUB_OUTPUT
+          else
+            echo "reason=SUCCESS" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Email (ONLY IF FAIL)
+        if: steps.reason.outputs.reason != 'SUCCESS'
         uses: hilarion5/send-mail@v1
         with:
           smtp-server: smtp.gmail.com
@@ -194,20 +220,14 @@ jobs:
           password: ${{ secrets.EMAIL_PASSWORD }}
           from-email: ${{ secrets.EMAIL_USERNAME }}
           to-email: asadchamp109@gmail.com,kajapathy07@gmail.com
-          subject: "ALERT: Security Scan Failed"
+          subject: "ALERT: Security Pipeline Failed"
           html: |
-            <h2 style="color:red;">Security Alert</h2>
+            <h2 style="color:red;">Security Pipeline Failed</h2>
 
-            <p><b>SonarQube:</b> ${{ env.SONAR_FAILED == 'true' && 'FAILED' || 'PASSED' }}</p>
-            <p><b>Snyk:</b> ${{ env.SNYK_FAILED == 'true' && 'FAILED' || 'PASSED' }}</p>
-
-            <p>Please check the pipeline for details.</p>
+            <p><b>Reason:</b> ${{ steps.reason.outputs.reason }}</p>
+            <p><b>Repository:</b> ${{ github.repository }}</p>
+            <p><b>Author:</b> ${{ github.actor }}</p>
 
             <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">
               View Pipeline
             </a>
-
-      # ⛔ Fail pipeline AFTER notification
-      - name: Fail Pipeline
-        if: env.SONAR_FAILED == 'true' || env.SNYK_FAILED == 'true'
-        run: exit 1
