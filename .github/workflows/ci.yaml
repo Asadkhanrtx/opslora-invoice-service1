@@ -135,12 +135,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 🔍 SonarQube Scan (unchanged)
+      # 🔍 SonarQube Scan
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
 
       # ✅ Quality Gate
       - name: SonarQube Quality Gate
@@ -151,14 +154,14 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      # 🚨 Set Sonar failure flag (no exit here)
+      # 🚨 Set Sonar Status
       - name: Set Sonar Status
         run: |
           if [ "${{ steps.sonar-gate.outputs.quality-gate-status }}" = "FAILED" ]; then
             echo "SONAR_FAILED=true" >> $GITHUB_ENV
           fi
 
-      # 🔐 Snyk runs ONLY if Sonar passed
+      # 🔐 Install Snyk (ONLY if Sonar passed)
       - name: Install Snyk
         if: steps.sonar-gate.outputs.quality-gate-status == 'PASSED'
         run: npm install -g snyk
@@ -167,18 +170,19 @@ jobs:
         if: steps.sonar-gate.outputs.quality-gate-status == 'PASSED'
         run: snyk auth ${{ secrets.SNYK_TOKEN }}
 
+      # 🔍 Run Snyk Test
       - name: Run Snyk Test
         id: snyk-test
         if: steps.sonar-gate.outputs.quality-gate-status == 'PASSED'
         continue-on-error: true
         run: snyk test --severity-threshold=high
 
-      # 🚨 Set Snyk failure flag
+      # 🚨 Set Snyk Status
       - name: Set Snyk Status
         if: steps.snyk-test.outcome == 'failure'
         run: echo "SNYK_FAILED=true" >> $GITHUB_ENV
 
-      # 📧 SINGLE NOTIFICATION (only if anything fails)
+      # 📧 SINGLE NOTIFICATION STEP
       - name: Send Notification
         if: env.SONAR_FAILED == 'true' || env.SNYK_FAILED == 'true'
         uses: hilarion5/send-mail@v1
@@ -203,7 +207,7 @@ jobs:
               View Pipeline
             </a>
 
-      # ⛔ Finally fail pipeline if anything failed (after email)
+      # ⛔ Fail pipeline AFTER notification
       - name: Fail Pipeline
         if: env.SONAR_FAILED == 'true' || env.SNYK_FAILED == 'true'
         run: exit 1
